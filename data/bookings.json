@@ -1,0 +1,16 @@
+[
+  {
+    "bookingId": "BK-2913",
+    "name": "Alexander Wright",
+    "phone": "+971501234567",
+    "email": "alexander@example.com",
+    "date": "2026-11-05",
+    "time": "2:00 PM GST",
+    "property": "Bayz 102",
+    "notes": "",
+    "emailStatus": "Email notifications not configured (set SMTP_HOST, SMTP_USER, SMTP_PASS in .env). Booking saved locally.",
+    "whatsAppStatus": "Prepared for dispatch to +971501234567",
+    "whatsAppUrl": "https://wa.me/971501234567?text=*New%20GNS%20Booking%3A%20BK-2913*%0AClient%3A%20Alexander%20Wright%0ADate%20%26%20Time%3A%202026-11-05%20at%202%3A00%20PM%20GST%0AProperty%2FTopic%3A%20Bayz%20102%0APhone%3A%20%2B971501234567%0AEmail%3A%20alexander%40example.com%0ANotes%3A%20None",
+    "timestamp": "2026-10-30 16:07"
+  }
+]

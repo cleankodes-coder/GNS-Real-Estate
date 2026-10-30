@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-primary-gold: #D6A536;
+    --color-gold-hover: #B98722;
+    --color-headings: #202020;
+    --color-body: #666666;
+    --color-white: #FFFFFF;
+    --color-alt-bg: #F5F4F0;
+    --color-borders: #E8E5DE;
+  }
+
+  body {
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: #FFFFFF;
+    color: #666666;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Playfair Display', Georgia, serif;
+    font-weight: 600;
+    color: #202020;
+  }
+}
+
+.font-serif, .font-heading, .font-playfair {
+  font-family: 'Playfair Display', Georgia, serif;
+}
+
+.font-sans, .font-inter {
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Subtle, clean scrollbars matching light palette */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #F5F4F0;
+}
+::-webkit-scrollbar-thumb {
+  background: #D8D4CC;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #D6A536;
+}
+
+/* Receptionist website control highlight */
+@keyframes saraPulseHighlight {
+  0% {
+    box-shadow: 0 0 0 0 rgba(214, 165, 54, 0.7);
+    outline: 2px solid #D6A536;
+  }
+  35% {
+    box-shadow: 0 0 28px 6px rgba(214, 165, 54, 0.55);
+    outline: 2px solid #D6A536;
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(214, 165, 54, 0);
+    outline: 2px solid transparent;
+  }
+}
+
+.sara-active-highlight {
+  animation: saraPulseHighlight 2.5s ease-out forwards !important;
+  border-radius: 0.5rem;
+  transition: all 0.3s ease;
+}

@@ -1,0 +1,6 @@
+{
+  "name": "GNS Real Estate V2",
+  "description": "Next-generation luxury and prime commercial real estate portal featuring global architectural estates, interactive map discovery, virtual tours, and private client advisory with AI receptionist.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
