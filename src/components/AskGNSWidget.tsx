@@ -22,8 +22,13 @@ import {
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { GNS_CONFIG, VERIFIED_PROPERTIES } from '../data/gnsData';
-import { SARA_SYSTEM_INSTRUCTION } from '../data/websiteControl';
-import { StoredBooking, StoredLead } from '../data/bookingTypes';
+import { GoogleGenAI, Modality } from '@google/genai';
+import {
+  SARA_SYSTEM_INSTRUCTION,
+  RECEPTIONIST_TOOLS,
+  executeClientLocalTool,
+} from '../data/websiteControl';
+import { StoredBooking, StoredLead, ToolExecutionOutput } from '../data/bookingTypes';
 
 export interface ChatMessage {
   id: string;
@@ -156,7 +161,7 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
   const isCallActiveRef = useRef(false);
   const isMutedRef = useRef(false);
   const messagesRef = useRef<ChatMessage[]>(messages);
-  const wsRef = useRef<WebSocket | null>(null);
+  const liveSessionRef = useRef<any>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const inputAudioCtxRef = useRef<AudioContext | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
@@ -224,11 +229,11 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
     currentCallerMsgIdRef.current = null;
     currentSaraMsgIdRef.current = null;
 
-    if (wsRef.current) {
+    if (liveSessionRef.current) {
       try {
-        wsRef.current.close();
+        liveSessionRef.current.close();
       } catch {}
-      wsRef.current = null;
+      liveSessionRef.current = null;
     }
 
     if (audioProcessorRef.current) {
@@ -498,13 +503,12 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
           silenceStageRef.current = 'asked';
 
           // Trigger Sara to ask "Are you still there?"
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-            wsRef.current.send(
-              JSON.stringify({
-                type: 'audio_text',
+          if (liveSessionRef.current) {
+            try {
+              liveSessionRef.current.sendRealtimeInput({
                 text: 'The caller has been silent. Politely ask "Are you still there?".',
-              })
-            );
+              });
+            } catch {}
           }
 
           // Start 60-second timer after asking
@@ -597,132 +601,227 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
       outputAudioCtxRef.current = outputCtx;
       nextStartTimeRef.current = outputCtx.currentTime;
 
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/api/live`;
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
+      // 1. Fetch ephemeral token from Vercel serverless function /api/token
+      const tokenRes = await fetch('/api/token');
+      if (!tokenRes.ok) {
+        const errJson = await tokenRes.json().catch(() => null);
+        throw new Error(errJson?.error || `Token generation failed with status ${tokenRes.status}`);
+      }
+      const tokenData = await tokenRes.json();
+      if (!tokenData?.token) {
+        throw new Error('No ephemeral token returned from /api/token');
+      }
 
-      ws.onopen = () => {
-        // Connected to server bridge
-      };
+      // 2. Connect directly to Gemini Live using @google/genai from the browser
+      const clientAi = new GoogleGenAI({
+        apiKey: tokenData.token,
+        httpOptions: { apiVersion: 'v1alpha' },
+      });
 
-      ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-
-          if (msg.type === 'connected') {
+      const session = await clientAi.live.connect({
+        model: tokenData.model || 'gemini-3.8-live',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: tokenData.voiceName || 'Aoede' } },
+          },
+          systemInstruction: SARA_SYSTEM_INSTRUCTION,
+          tools: RECEPTIONIST_TOOLS,
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+        },
+        callbacks: {
+          onopen: () => {
             setCallStatus('listening');
-            ws.send(JSON.stringify({ type: 'start' }));
-          } else if (msg.type === 'toolAction') {
-            // Requirement 5: Display tool action as small status line in chat
-            const statusMsg: ChatMessage = {
-              id: `tool-${Date.now()}-${Math.random()}`,
-              sender: 'assistant',
-              text: msg.statusText || 'Executing action',
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              isToolStatus: true,
-              isError: false,
-              toolName: msg.tool,
-            };
+            session.sendRealtimeInput({
+              text: 'Start the call with your warm phone greeting now.',
+            });
+          },
+          onmessage: async (msg: any) => {
+            try {
+              // 1. Handle Function Calls (tools)
+              if (msg.toolCall?.functionCalls && msg.toolCall.functionCalls.length > 0) {
+                for (const call of msg.toolCall.functionCalls) {
+                  const liveToolName = call.name || '';
+                  const liveCallId = call.id || `call-${Date.now()}`;
+                  try {
+                    let toolExec: ToolExecutionOutput;
+                    if (liveToolName === 'book_appointment' || liveToolName === 'save_lead_details') {
+                      const res = await fetch('/api/execute-tool', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: liveToolName, args: call.args }),
+                      });
+                      if (!res.ok) {
+                        const errData = await res.json().catch(() => null);
+                        throw new Error(errData?.error || 'Tool execution failed');
+                      }
+                      toolExec = await res.json();
+                    } else {
+                      toolExec = executeClientLocalTool(liveToolName, call.args);
+                    }
 
-            const extraMessages: ChatMessage[] = [statusMsg];
+                    const statusMsg: ChatMessage = {
+                      id: `tool-${Date.now()}-${Math.random()}`,
+                      sender: 'assistant',
+                      text: toolExec.statusText || 'Executing action',
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                      isToolStatus: true,
+                      isError: false,
+                      toolName: liveToolName,
+                    };
 
-            // If appointment booked: show confirmation card
-            if (msg.clientAction?.booking) {
-              extraMessages.push({
-                id: `bk-card-${Date.now()}`,
-                sender: 'assistant',
-                text: `Viewing Appointment confirmed for ${msg.clientAction.booking.name} (${msg.clientAction.booking.bookingId}).`,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                bookingConfirmation: msg.clientAction.booking,
-              });
+                    const extraMessages: ChatMessage[] = [statusMsg];
+                    if (toolExec.clientAction?.booking) {
+                      extraMessages.push({
+                        id: `bk-card-${Date.now()}`,
+                        sender: 'assistant',
+                        text: `Viewing Appointment confirmed for ${toolExec.clientAction.booking.name} (${toolExec.clientAction.booking.bookingId}).`,
+                        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        bookingConfirmation: toolExec.clientAction.booking,
+                      });
+                    }
+                    if (toolExec.clientAction?.lead) {
+                      extraMessages.push({
+                        id: `ld-card-${Date.now()}`,
+                        sender: 'assistant',
+                        text: `Lead registration recorded for ${toolExec.clientAction.lead.name} (${toolExec.clientAction.lead.leadId}).`,
+                        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        leadConfirmation: toolExec.clientAction.lead,
+                      });
+                    }
+
+                    setMessages((prev) => [...prev, ...extraMessages]);
+
+                    if (toolExec.clientAction) {
+                      executeClientAction(toolExec.clientAction);
+                    }
+
+                    session.sendToolResponse({
+                      functionResponses: [
+                        {
+                          id: liveCallId,
+                          name: liveToolName,
+                          response: {
+                            output: toolExec.data,
+                            summary: toolExec.summaryForSara,
+                          },
+                        },
+                      ],
+                    });
+                  } catch (toolErr: any) {
+                    const errMsg = toolErr?.message || 'Tool execution failed';
+                    const errorMsg: ChatMessage = {
+                      id: `tool-err-${Date.now()}-${Math.random()}`,
+                      sender: 'assistant',
+                      text: `Error: ${errMsg}`,
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                      isToolStatus: true,
+                      isError: true,
+                      toolName: liveToolName,
+                    };
+                    setMessages((prev) => [...prev, errorMsg]);
+
+                    session.sendToolResponse({
+                      functionResponses: [
+                        {
+                          id: liveCallId,
+                          name: liveToolName,
+                          response: { error: errMsg },
+                        },
+                      ],
+                    });
+                  }
+                }
+              }
+
+              const content = msg.serverContent;
+              if (!content) return;
+
+              // 2. Handle audio playback (24kHz PCM)
+              if (content.modelTurn?.parts) {
+                for (const part of content.modelTurn.parts) {
+                  if (part.inlineData?.data) {
+                    playAudioChunk(part.inlineData.data);
+                  }
+                }
+              }
+
+              // 3. Sara live transcript
+              if (content.outputTranscription?.text) {
+                const chunk = content.outputTranscription.text;
+                if (!currentSaraMsgIdRef.current) {
+                  const newId = `sara-${Date.now()}`;
+                  currentSaraMsgIdRef.current = newId;
+                  const newMsg: ChatMessage = {
+                    id: newId,
+                    sender: 'assistant',
+                    text: chunk,
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  };
+                  setMessages((prev) => [...prev, newMsg]);
+                } else {
+                  setMessages((prev) =>
+                    prev.map((m) =>
+                      m.id === currentSaraMsgIdRef.current ? { ...m, text: m.text + chunk } : m
+                    )
+                  );
+                }
+              }
+
+              // 4. Caller live transcript
+              if (content.inputTranscription?.text) {
+                resetSilenceTimer();
+                currentSaraMsgIdRef.current = null;
+                const callerText = content.inputTranscription.text.trim();
+                if (callerText) {
+                  if (!currentCallerMsgIdRef.current) {
+                    const newId = `caller-${Date.now()}`;
+                    currentCallerMsgIdRef.current = newId;
+                    const newMsg: ChatMessage = {
+                      id: newId,
+                      sender: 'user',
+                      text: callerText,
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                      isVoiceTranscript: true,
+                    };
+                    setMessages((prev) => [...prev, newMsg]);
+                  } else {
+                    setMessages((prev) =>
+                      prev.map((m) =>
+                        m.id === currentCallerMsgIdRef.current
+                          ? { ...m, text: m.text + ' ' + callerText }
+                          : m
+                      )
+                    );
+                  }
+                }
+              }
+
+              // 5. Caller interruption (stop playing previous response immediately)
+              if (content.interrupted) {
+                stopAllPlayback();
+                setCallStatus('listening');
+                currentSaraMsgIdRef.current = null;
+              }
+
+              // 6. Turn complete
+              if (content.turnComplete) {
+                currentCallerMsgIdRef.current = null;
+                currentSaraMsgIdRef.current = null;
+              }
+            } catch (err) {
+              console.warn('Error handling Gemini Live message:', err);
             }
-
-            // If lead registered: show lead confirmation card
-            if (msg.clientAction?.lead) {
-              extraMessages.push({
-                id: `ld-card-${Date.now()}`,
-                sender: 'assistant',
-                text: `Lead registration recorded for ${msg.clientAction.lead.name} (${msg.clientAction.lead.leadId}).`,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                leadConfirmation: msg.clientAction.lead,
-              });
+          },
+          onclose: (e) => {
+            if (isCallActiveRef.current) {
+              endVoiceCall('Call ended');
             }
-
-            setMessages((prev) => [...prev, ...extraMessages]);
-
-            // Execute client action (navigation, filter, or end_call)
-            if (msg.clientAction) {
-              executeClientAction(msg.clientAction);
-            }
-          } else if (msg.type === 'toolError') {
-            // Requirement 5: Show real error message if a tool fails
-            const errorMsg: ChatMessage = {
-              id: `tool-err-${Date.now()}-${Math.random()}`,
-              sender: 'assistant',
-              text: msg.statusText || `Error: ${msg.error}`,
-              timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              isToolStatus: true,
-              isError: true,
-              toolName: msg.tool,
-            };
-            setMessages((prev) => [...prev, errorMsg]);
-          } else if (msg.type === 'audio' && msg.audio) {
-            playAudioChunk(msg.audio);
-          } else if (msg.type === 'outputTranscript' && msg.text) {
-            const chunk = msg.text;
-            if (!currentSaraMsgIdRef.current) {
-              const newId = `sara-${Date.now()}`;
-              currentSaraMsgIdRef.current = newId;
-              const newMsg: ChatMessage = {
-                id: newId,
-                sender: 'assistant',
-                text: chunk,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              };
-              setMessages((prev) => [...prev, newMsg]);
-            } else {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === currentSaraMsgIdRef.current ? { ...m, text: m.text + chunk } : m
-                )
-              );
-            }
-          } else if (msg.type === 'inputTranscript' && msg.text) {
-            resetSilenceTimer();
-            currentSaraMsgIdRef.current = null;
-            const callerText = msg.text.trim();
-            if (!callerText) return;
-
-            if (!currentCallerMsgIdRef.current) {
-              const newId = `caller-${Date.now()}`;
-              currentCallerMsgIdRef.current = newId;
-              const newMsg: ChatMessage = {
-                id: newId,
-                sender: 'user',
-                text: callerText,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                isVoiceTranscript: true,
-              };
-              setMessages((prev) => [...prev, newMsg]);
-            } else {
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === currentCallerMsgIdRef.current
-                    ? { ...m, text: m.text + ' ' + callerText }
-                    : m
-                )
-              );
-            }
-          } else if (msg.type === 'interrupted') {
-            stopAllPlayback();
-            setCallStatus('listening');
-            currentSaraMsgIdRef.current = null;
-          } else if (msg.type === 'turnComplete') {
-            currentCallerMsgIdRef.current = null;
-            currentSaraMsgIdRef.current = null;
-          } else if (msg.type === 'error') {
-            const errStr = msg.error || 'Gemini Live encountered an error';
+          },
+          onerror: (err) => {
+            console.warn('Gemini Live session error:', err);
+            const errStr = err?.message || 'Gemini Live encountered an error.';
             setCallErrorMessage(errStr);
             setCallStatus('error');
             const errChatMessage: ChatMessage = {
@@ -732,26 +831,11 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             };
             setMessages((prev) => [...prev, errChatMessage]);
-          } else if (msg.type === 'closed') {
-            if (isCallActiveRef.current) {
-              endVoiceCall('Call ended');
-            }
-          }
-        } catch (err) {
-          console.warn('Error handling WebSocket message:', err);
-        }
-      };
+          },
+        },
+      });
 
-      ws.onerror = () => {
-        setCallErrorMessage('WebSocket connection failed to reach Gemini Live server.');
-        setCallStatus('error');
-      };
-
-      ws.onclose = () => {
-        if (isCallActiveRef.current) {
-          endVoiceCall('Call ended');
-        }
-      };
+      liveSessionRef.current = session;
 
       const micSource = inputCtx.createMediaStreamSource(stream);
       const processor = inputCtx.createScriptProcessor(2048, 1, 1);
@@ -759,17 +843,16 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
 
       processor.onaudioprocess = (e) => {
         if (!isCallActiveRef.current || isMutedRef.current) return;
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        if (!liveSessionRef.current) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
         const pcmBase64 = processInputAudioTo16k(inputData, inputCtx.sampleRate);
 
-        wsRef.current.send(
-          JSON.stringify({
-            type: 'audio',
-            audio: pcmBase64,
-          })
-        );
+        try {
+          liveSessionRef.current.sendRealtimeInput({
+            audio: { data: pcmBase64, mimeType: 'audio/pcm;rate=16000' },
+          });
+        } catch {}
       };
 
       micSource.connect(processor);

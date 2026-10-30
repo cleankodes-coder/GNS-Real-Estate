@@ -12,19 +12,48 @@ import {
 export type { StoredBooking, StoredLead };
 export { isValidEmail, isValidPhone };
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
-const BOOKINGS_FILE = path.join(DATA_DIR, 'bookings.json');
-const LEADS_FILE = path.join(DATA_DIR, 'leads.json');
+function getDataDir(): string {
+  if (process.env.VERCEL) {
+    return path.join('/tmp', 'data');
+  }
+  return path.resolve(process.cwd(), 'data');
+}
+
+function getBookingsFile(): string {
+  return path.join(getDataDir(), 'bookings.json');
+}
+
+function getLeadsFile(): string {
+  return path.join(getDataDir(), 'leads.json');
+}
 
 function ensureDataStorage() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
-  }
-  if (!fs.existsSync(BOOKINGS_FILE)) {
-    fs.writeFileSync(BOOKINGS_FILE, JSON.stringify([], null, 2), 'utf-8');
-  }
-  if (!fs.existsSync(LEADS_FILE)) {
-    fs.writeFileSync(LEADS_FILE, JSON.stringify([], null, 2), 'utf-8');
+  const dir = getDataDir();
+  try {
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const bFile = getBookingsFile();
+    if (!fs.existsSync(bFile)) {
+      fs.writeFileSync(bFile, JSON.stringify([], null, 2), 'utf-8');
+    }
+    const lFile = getLeadsFile();
+    if (!fs.existsSync(lFile)) {
+      fs.writeFileSync(lFile, JSON.stringify([], null, 2), 'utf-8');
+    }
+  } catch {
+    const tmpDir = path.join('/tmp', 'data');
+    if (!fs.existsSync(tmpDir)) {
+      fs.mkdirSync(tmpDir, { recursive: true });
+    }
+    const bFile = path.join(tmpDir, 'bookings.json');
+    if (!fs.existsSync(bFile)) {
+      fs.writeFileSync(bFile, JSON.stringify([], null, 2), 'utf-8');
+    }
+    const lFile = path.join(tmpDir, 'leads.json');
+    if (!fs.existsSync(lFile)) {
+      fs.writeFileSync(lFile, JSON.stringify([], null, 2), 'utf-8');
+    }
   }
 }
 
@@ -147,52 +176,79 @@ export function prepareAdvisorWhatsApp(booking: {
 export function saveBookingToDatabase(bookingData: StoredBooking): StoredBooking {
   ensureDataStorage();
   let bookings: StoredBooking[] = [];
+  const file = getBookingsFile();
   try {
-    const raw = fs.readFileSync(BOOKINGS_FILE, 'utf-8');
+    const raw = fs.readFileSync(file, 'utf-8');
     bookings = JSON.parse(raw);
-  } catch {}
+  } catch {
+    try {
+      const raw = fs.readFileSync(path.join('/tmp', 'data', 'bookings.json'), 'utf-8');
+      bookings = JSON.parse(raw);
+    } catch {}
+  }
   bookings.unshift(bookingData);
-  fs.writeFileSync(BOOKINGS_FILE, JSON.stringify(bookings, null, 2), 'utf-8');
+  try {
+    fs.writeFileSync(file, JSON.stringify(bookings, null, 2), 'utf-8');
+  } catch {
+    try {
+      fs.writeFileSync(path.join('/tmp', 'data', 'bookings.json'), JSON.stringify(bookings, null, 2), 'utf-8');
+    } catch {}
+  }
   return bookingData;
 }
 
-/**
- * Returns all stored bookings
- */
 export function getAllBookings(): StoredBooking[] {
   ensureDataStorage();
+  const file = getBookingsFile();
   try {
-    const raw = fs.readFileSync(BOOKINGS_FILE, 'utf-8');
+    const raw = fs.readFileSync(file, 'utf-8');
     return JSON.parse(raw);
   } catch {
-    return [];
+    try {
+      const raw = fs.readFileSync(path.join('/tmp', 'data', 'bookings.json'), 'utf-8');
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
   }
 }
 
-/**
- * Persists a new lead to data/leads.json
- */
 export function saveLeadToDatabase(leadData: StoredLead): StoredLead {
   ensureDataStorage();
   let leads: StoredLead[] = [];
+  const file = getLeadsFile();
   try {
-    const raw = fs.readFileSync(LEADS_FILE, 'utf-8');
+    const raw = fs.readFileSync(file, 'utf-8');
     leads = JSON.parse(raw);
-  } catch {}
+  } catch {
+    try {
+      const raw = fs.readFileSync(path.join('/tmp', 'data', 'leads.json'), 'utf-8');
+      leads = JSON.parse(raw);
+    } catch {}
+  }
   leads.unshift(leadData);
-  fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2), 'utf-8');
+  try {
+    fs.writeFileSync(file, JSON.stringify(leads, null, 2), 'utf-8');
+  } catch {
+    try {
+      fs.writeFileSync(path.join('/tmp', 'data', 'leads.json'), JSON.stringify(leads, null, 2), 'utf-8');
+    } catch {}
+  }
   return leadData;
 }
 
-/**
- * Returns all stored leads
- */
 export function getAllLeads(): StoredLead[] {
   ensureDataStorage();
+  const file = getLeadsFile();
   try {
-    const raw = fs.readFileSync(LEADS_FILE, 'utf-8');
+    const raw = fs.readFileSync(file, 'utf-8');
     return JSON.parse(raw);
   } catch {
-    return [];
+    try {
+      const raw = fs.readFileSync(path.join('/tmp', 'data', 'leads.json'), 'utf-8');
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
   }
 }

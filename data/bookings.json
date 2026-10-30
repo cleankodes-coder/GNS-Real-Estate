@@ -1,5 +1,19 @@
 [
   {
+    "bookingId": "BK-6689",
+    "name": "Liam Vance",
+    "phone": "+971501112233",
+    "email": "liam@example.com",
+    "date": "2026-11-10",
+    "time": "10:00 AM",
+    "property": "Oria Creek Harbour",
+    "notes": "",
+    "emailStatus": "Email notifications not configured (set SMTP_HOST, SMTP_USER, SMTP_PASS in .env). Booking saved locally.",
+    "whatsAppStatus": "Prepared for dispatch to +971501234567",
+    "whatsAppUrl": "https://wa.me/971501234567?text=*New%20GNS%20Booking%3A%20BK-6689*%0AClient%3A%20Liam%20Vance%0ADate%20%26%20Time%3A%202026-11-10%20at%2010%3A00%20AM%0AProperty%2FTopic%3A%20Oria%20Creek%20Harbour%0APhone%3A%20%2B971501112233%0AEmail%3A%20liam%40example.com%0ANotes%3A%20None",
+    "timestamp": "2026-10-30 17:55"
+  },
+  {
     "bookingId": "BK-2913",
     "name": "Alexander Wright",
     "phone": "+971501234567",

@@ -306,3 +306,268 @@ export function findClosestProperties(criteria: {
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, 2).map((s) => s.property);
 }
+
+/**
+ * Execute client navigation and local queries directly in browser
+ */
+export function executeClientLocalTool(
+  name: string,
+  rawArgs: any = {}
+): ToolExecutionOutput {
+  const args = typeof rawArgs === 'object' && rawArgs !== null ? rawArgs : {};
+
+  if (name === 'navigate_to_section') {
+    const section = String(args.section || 'home').toLowerCase().trim();
+    if (section.includes('prop')) {
+      return {
+        success: true,
+        statusText: 'Showing Properties section',
+        clientAction: {
+          type: 'navigate_to_section',
+          path: '/properties',
+          elementId: 'properties-page-container',
+        },
+        data: {
+          section: 'Properties',
+          totalProperties: VERIFIED_PROPERTIES.length,
+          properties: VERIFIED_PROPERTIES.map((p) => ({
+            id: p.id,
+            title: p.title,
+            location: p.location,
+            pricing: p.pricingNote,
+            bedrooms: p.bedrooms,
+          })),
+        },
+        summaryForSara: `On screen: The Properties page displays all 7 verified luxury developments across Dubai.`,
+      };
+    }
+    if (section.includes('about')) {
+      return {
+        success: true,
+        statusText: 'Navigating to About section',
+        clientAction: {
+          type: 'navigate_to_section',
+          path: '/about',
+          elementId: 'about-page-container',
+        },
+        data: { section: 'About GNS' },
+        summaryForSara: `On screen: About GNS Real Estate displays our licensed brokerage credentials in Vision Tower.`,
+      };
+    }
+    if (section.includes('team')) {
+      return {
+        success: true,
+        statusText: 'Opening Advisory Team',
+        clientAction: {
+          type: 'navigate_to_section',
+          path: '/team',
+          elementId: 'team-page-container',
+        },
+        data: { section: 'Our Team' },
+        summaryForSara: `On screen: The GNS Advisory Team page presents our licensed advisors.`,
+      };
+    }
+    if (section.includes('contact') || section.includes('enquir')) {
+      return {
+        success: true,
+        statusText: 'Opening Contact section',
+        clientAction: {
+          type: 'navigate_to_section',
+          path: '/contact',
+          elementId: 'contact-page-container',
+        },
+        data: { section: 'Contact Desk' },
+        summaryForSara: `On screen: The Contact section displays our Vision Tower office and direct enquiry form.`,
+      };
+    }
+    if (section.includes('communit')) {
+      return {
+        success: true,
+        statusText: 'Showing Popular Communities',
+        clientAction: {
+          type: 'navigate_to_section',
+          path: '/',
+          elementId: 'communities',
+        },
+        data: { section: 'Communities' },
+        summaryForSara: `On screen: Showing popular prime communities across Dubai including Creek Harbour and Business Bay.`,
+      };
+    }
+    if (section.includes('villa')) {
+      return {
+        success: true,
+        statusText: 'Showing Villas and Townhouses',
+        clientAction: {
+          type: 'navigate_to_section',
+          path: '/',
+          elementId: 'villas',
+        },
+        data: { section: 'Villas & Townhouses' },
+        summaryForSara: `On screen: The Villas and Townhouses section highlights luxury villas in Dubai Hills and waterfront townhouses.`,
+      };
+    }
+    return {
+      success: true,
+      statusText: 'Navigating to Home',
+      clientAction: {
+        type: 'navigate_to_section',
+        path: '/',
+        elementId: 'root',
+      },
+      data: { section: 'Home' },
+      summaryForSara: `On screen: The Home page displays our Dubai luxury portfolio, premier developers, and featured project launches.`,
+    };
+  }
+
+  if (name === 'show_properties') {
+    const loc = args.location ? String(args.location).trim() : '';
+    const beds = args.bedrooms !== undefined ? String(args.bedrooms).trim() : '';
+    const maxBudget = args.max_budget ? Number(args.max_budget) : undefined;
+    const type = args.type ? String(args.type).trim() : '';
+
+    const matches = VERIFIED_PROPERTIES.filter((prop) => {
+      if (loc) {
+        const q = loc.toLowerCase();
+        const matchesLoc =
+          prop.location.toLowerCase().includes(q) ||
+          prop.subLocation.toLowerCase().includes(q) ||
+          prop.title.toLowerCase().includes(q) ||
+          prop.developer.toLowerCase().includes(q);
+        if (!matchesLoc) return false;
+      }
+      if (type && type !== 'All') {
+        const q = type.toLowerCase();
+        const cat = prop.category.toLowerCase();
+        if (
+          !cat.includes(q) &&
+          !(q.includes('villa') && cat.includes('villa')) &&
+          !(q.includes('apart') && cat.includes('apart')) &&
+          !(q.includes('off') && cat.includes('off'))
+        ) {
+          return false;
+        }
+      }
+      if (beds && !propertyMatchesBedrooms(prop.bedrooms, beds)) {
+        return false;
+      }
+      if (maxBudget && prop.startingPriceAED > maxBudget) {
+        return false;
+      }
+      return true;
+    });
+
+    const parts: string[] = [];
+    if (loc) parts.push(loc);
+    if (beds) parts.push(beds.includes('bed') || beds.toLowerCase() === 'studio' ? beds : `${beds} bedrooms`);
+    if (type && type !== 'All') parts.push(type);
+    if (maxBudget) parts.push(`under AED ${maxBudget.toLocaleString()}`);
+
+    const filterLabel = parts.length > 0 ? parts.join(', ') : 'All Properties';
+
+    if (matches.length > 0) {
+      return {
+        success: true,
+        statusText: `Showing ${filterLabel}`,
+        clientAction: {
+          type: 'show_properties',
+          path: '/properties',
+          elementId: 'properties-grid',
+          params: {
+            location: loc || undefined,
+            bedrooms: beds || undefined,
+            max_budget: maxBudget,
+            type: type || undefined,
+          },
+        },
+        data: {
+          matchingCount: matches.length,
+          properties: matches.map((p) => ({
+            id: p.id,
+            slug: p.slug,
+            title: p.title,
+            location: p.location,
+            pricingNote: p.pricingNote,
+            bedrooms: p.bedrooms,
+          })),
+        },
+        summaryForSara: `On screen: Filtered to show ${matches.length} matching properties for ${filterLabel}. The Properties section is now highlighted.`,
+      };
+    }
+
+    const closest = findClosestProperties({ location: loc, bedrooms: beds, max_budget: maxBudget, type });
+    return {
+      success: true,
+      statusText: `No exact match for ${filterLabel}; showing closest options`,
+      clientAction: {
+        type: 'show_properties',
+        path: '/properties',
+        elementId: 'properties-grid',
+        params: {
+          location: loc || undefined,
+          bedrooms: beds || undefined,
+          max_budget: maxBudget,
+          type: type || undefined,
+        },
+      },
+      data: {
+        matchingCount: 0,
+        closestOptions: closest,
+      },
+      summaryForSara: `On screen: No properties match ${filterLabel} exactly. Showing closest verified alternatives.`,
+    };
+  }
+
+  if (name === 'get_property_details') {
+    const rawId = String(args.id || '').trim().toLowerCase();
+    const property = VERIFIED_PROPERTIES.find(
+      (p) =>
+        p.id.toLowerCase() === rawId ||
+        p.slug.toLowerCase() === rawId ||
+        p.title.toLowerCase().includes(rawId) ||
+        rawId.includes(p.slug.toLowerCase()) ||
+        rawId.includes(p.id.toLowerCase())
+    );
+
+    if (!property) {
+      throw new Error(`Property "${args.id}" not found.`);
+    }
+
+    return {
+      success: true,
+      statusText: `Viewing ${property.title} details`,
+      clientAction: {
+        type: 'get_property_details',
+        path: `/properties/${property.slug}`,
+        elementId: 'property-detail-container',
+        propertySlug: property.slug,
+        propertyId: property.id,
+      },
+      data: {
+        id: property.id,
+        slug: property.slug,
+        title: property.title,
+        location: property.location,
+        pricingNote: property.pricingNote,
+        bedrooms: property.bedrooms,
+      },
+      summaryForSara: `On screen: The property dossier for ${property.title} in ${property.location} is now open and highlighted.`,
+    };
+  }
+
+  if (name === 'end_call') {
+    return {
+      success: true,
+      statusText: 'Call ended',
+      clientAction: {
+        type: 'end_call',
+      },
+      data: {
+        callEnded: true,
+      },
+      summaryForSara: 'The caller is finished. Speak one warm goodbye line.',
+    };
+  }
+
+  throw new Error(`Tool "${name}" is handled via serverless backend.`);
+}
+
