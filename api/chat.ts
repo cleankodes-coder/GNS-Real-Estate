@@ -2,8 +2,8 @@ import { GoogleGenAI } from '@google/genai';
 import {
   RECEPTIONIST_TOOLS,
   SARA_SYSTEM_INSTRUCTION,
-} from '../src/data/websiteControl';
-import { executeWebsiteTool } from '../server/toolExecutor';
+} from './_shared/websiteControl.js';
+import { executeWebsiteTool } from './_shared/toolExecutor.js';
 
 async function generateGeminiSpeech(text: string, apiKey: string): Promise<string> {
   const ai = new GoogleGenAI({
@@ -72,7 +72,7 @@ export default async function handler(req: any, res: any) {
 
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'GEMINI_API_KEY is missing from environment.' });
+    return res.status(500).json({ error: 'GEMINI_API_KEY is not set' });
   }
 
   const ai = new GoogleGenAI({

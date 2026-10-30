@@ -1,4 +1,4 @@
-import { getAllLeads } from '../server/backendStore';
+import { getAllLeads } from './_shared/backendStore.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');

@@ -2,7 +2,7 @@ import { GoogleGenAI, Modality } from '@google/genai';
 import {
   RECEPTIONIST_TOOLS,
   SARA_SYSTEM_INSTRUCTION,
-} from '../src/data/websiteControl';
+} from './_shared/websiteControl.js';
 
 export default async function handler(req: any, res: any) {
   // CORS support
@@ -17,7 +17,7 @@ export default async function handler(req: any, res: any) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     return res.status(500).json({
-      error: 'GEMINI_API_KEY environment variable is not configured.',
+      error: 'GEMINI_API_KEY is not set',
     });
   }
 

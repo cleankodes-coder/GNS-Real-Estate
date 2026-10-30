@@ -1,4 +1,4 @@
-import { getAllBookings } from '../server/backendStore';
+import { getAllBookings } from './_shared/backendStore.js';
 
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
