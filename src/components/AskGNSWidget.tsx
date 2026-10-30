@@ -174,6 +174,7 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
 
   // Auto End Call: Pending Goodbye Audio Finish
   const pendingEndCallRef = useRef<boolean>(false);
+  const hasGreetedRef = useRef<boolean>(false);
 
   // Silence Timer (60s after asking "Are you still there?")
   const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -213,11 +214,13 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
   /**
    * End voice call cleanly and reset all audio/WebSocket handles
    */
-  const endVoiceCall = useCallback((reasonText = 'Call ended') => {
+  const endVoiceCall = useCallback((reasonText = 'Call ended', shouldEmitMessage = true) => {
+    const wasActive = isCallActiveRef.current;
     setIsCallActive(false);
     isCallActiveRef.current = false;
     setCallStatus('idle');
     pendingEndCallRef.current = false;
+    hasGreetedRef.current = false;
 
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
@@ -262,19 +265,29 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
       outputAudioCtxRef.current = null;
     }
 
-    // Append 'Call ended' status in chat stream if not already present
-    setMessages((prev) => {
-      if (prev.length > 0 && prev[prev.length - 1].text === reasonText) return prev;
-      const endStatusMsg: ChatMessage = {
-        id: `call-ended-${Date.now()}`,
-        sender: 'assistant',
-        text: reasonText,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        isToolStatus: true,
-        isError: false,
-      };
-      return [...prev, endStatusMsg];
-    });
+    // Append 'Call ended' status in chat stream only once when call was really active
+    if (wasActive && shouldEmitMessage) {
+      setMessages((prev) => {
+        const hasRecentCallEnded = prev
+          .slice(-3)
+          .some(
+            (m) =>
+              m.text === 'Call ended' ||
+              m.text === reasonText ||
+              (m.isToolStatus && m.text.includes('Call ended'))
+          );
+        if (hasRecentCallEnded) return prev;
+        const endStatusMsg: ChatMessage = {
+          id: `call-ended-${Date.now()}`,
+          sender: 'assistant',
+          text: reasonText,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          isToolStatus: true,
+          isError: false,
+        };
+        return [...prev, endStatusMsg];
+      });
+    }
   }, [stopAllPlayback]);
 
   // Clean up on component unmount
@@ -353,7 +366,7 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
             pendingEndCallRef.current = true;
           } else {
             setTimeout(() => {
-              endVoiceCall('Call ended');
+              endVoiceCall('Call ended', false);
             }, 1200);
           }
         }
@@ -421,7 +434,7 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
           // If Sara called end_call(), wait until her goodbye audio finishes playing completely
           if (pendingEndCallRef.current) {
             pendingEndCallRef.current = false;
-            endVoiceCall('Call ended');
+            endVoiceCall('Call ended', false);
             return;
           }
 
@@ -534,7 +547,7 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
    * Start a Live two-way phone call with Sara using Gemini Live API with tool control
    */
   const startVoiceCall = async () => {
-    endVoiceCall();
+    endVoiceCall('Call ended', false);
     setCallErrorMessage('');
     setCallStatus('connecting');
     setIsCallActive(true);
@@ -542,8 +555,31 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
     currentCallerMsgIdRef.current = null;
     currentSaraMsgIdRef.current = null;
     pendingEndCallRef.current = false;
+    hasGreetedRef.current = false;
     resetSilenceTimer();
 
+    // 1. Ensure AudioContexts are created/resumed immediately in user-gesture event
+    try {
+      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (!outputAudioCtxRef.current || outputAudioCtxRef.current.state === 'closed') {
+        outputAudioCtxRef.current = new AudioCtxClass({ sampleRate: 24000 });
+      }
+      if (outputAudioCtxRef.current.state === 'suspended') {
+        await outputAudioCtxRef.current.resume();
+      }
+      nextStartTimeRef.current = outputAudioCtxRef.current.currentTime;
+
+      if (!inputAudioCtxRef.current || inputAudioCtxRef.current.state === 'closed') {
+        inputAudioCtxRef.current = new AudioCtxClass();
+      }
+      if (inputAudioCtxRef.current.state === 'suspended') {
+        await inputAudioCtxRef.current.resume();
+      }
+    } catch (audioInitErr: any) {
+      console.warn('AudioContext autoplay initialization warning:', audioInitErr);
+    }
+
+    // 2. Request user microphone
     if (!navigator?.mediaDevices?.getUserMedia) {
       const msg = 'Microphone access is not supported by your browser or environment.';
       console.warn(msg);
@@ -575,7 +611,7 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
 
       const friendlyMsg = isDenied
         ? 'Microphone permission was denied. Please allow microphone access in your browser address bar to speak with Sara, or use the text chat below.'
-        : 'Could not access your microphone. Please verify device permissions or chat with Sara below.';
+        : `Could not access your microphone: ${mediaErr?.message || 'permission error'}.`;
 
       setCallErrorMessage(friendlyMsg);
       setCallStatus('error');
@@ -587,21 +623,14 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
         sender: 'assistant',
         text: friendlyMsg,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isError: true,
       };
       setMessages((prev) => [...prev, assistantNotice]);
       return;
     }
 
     try {
-      const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
-      const inputCtx = new AudioCtxClass();
-      inputAudioCtxRef.current = inputCtx;
-
-      const outputCtx = new AudioCtxClass({ sampleRate: 24000 });
-      outputAudioCtxRef.current = outputCtx;
-      nextStartTimeRef.current = outputCtx.currentTime;
-
-      // 1. Fetch ephemeral token from Vercel serverless function /api/token
+      // 3. Fetch ephemeral token from Vercel serverless function /api/token
       const tokenRes = await fetch('/api/token');
       if (!tokenRes.ok) {
         const errJson = await tokenRes.json().catch(() => null);
@@ -612,13 +641,13 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
         throw new Error('No ephemeral token returned from /api/token');
       }
 
-      // 2. Connect directly to Gemini Live using @google/genai from the browser
+      // 4. Connect directly to Gemini Live using @google/genai from the browser
       const clientAi = new GoogleGenAI({
         apiKey: tokenData.token,
         httpOptions: { apiVersion: 'v1alpha' },
       });
 
-      const session = await clientAi.live.connect({
+      const sessionPromise = clientAi.live.connect({
         model: tokenData.model || 'gemini-3.8-live',
         config: {
           responseModalities: [Modality.AUDIO],
@@ -633,12 +662,45 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
         callbacks: {
           onopen: () => {
             setCallStatus('listening');
-            session.sendRealtimeInput({
-              text: 'Start the call with your warm phone greeting now.',
-            });
+            sessionPromise
+              .then((activeSession) => {
+                liveSessionRef.current = activeSession;
+                // Greet caller once when call starts so Sara speaks the greeting
+                if (!hasGreetedRef.current) {
+                  hasGreetedRef.current = true;
+                  try {
+                    activeSession.sendClientContent({
+                      turns: [
+                        {
+                          role: 'user',
+                          parts: [
+                            {
+                              text: 'Hello Sara! Start the call with your warm phone greeting now in 1 to 2 short sentences.',
+                            },
+                          ],
+                        },
+                      ],
+                      turnComplete: true,
+                    });
+                  } catch {
+                    try {
+                      activeSession.sendRealtimeInput({
+                        text: 'Start the call with your warm phone greeting now.',
+                      });
+                    } catch (e) {
+                      console.warn('Initial greeting trigger failed:', e);
+                    }
+                  }
+                }
+              })
+              .catch((err) => {
+                console.warn('sessionPromise resolution failed in onopen:', err);
+              });
           },
           onmessage: async (msg: any) => {
             try {
+              const activeSession = liveSessionRef.current || (await sessionPromise);
+
               // 1. Handle Function Calls (tools)
               if (msg.toolCall?.functionCalls && msg.toolCall.functionCalls.length > 0) {
                 for (const call of msg.toolCall.functionCalls) {
@@ -697,7 +759,7 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
                       executeClientAction(toolExec.clientAction);
                     }
 
-                    session.sendToolResponse({
+                    activeSession.sendToolResponse({
                       functionResponses: [
                         {
                           id: liveCallId,
@@ -722,7 +784,7 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
                     };
                     setMessages((prev) => [...prev, errorMsg]);
 
-                    session.sendToolResponse({
+                    activeSession.sendToolResponse({
                       functionResponses: [
                         {
                           id: liveCallId,
@@ -814,14 +876,14 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
               console.warn('Error handling Gemini Live message:', err);
             }
           },
-          onclose: (e) => {
+          onclose: () => {
             if (isCallActiveRef.current) {
-              endVoiceCall('Call ended');
+              endVoiceCall('Call ended', true);
             }
           },
-          onerror: (err) => {
+          onerror: (err: any) => {
             console.warn('Gemini Live session error:', err);
-            const errStr = err?.message || 'Gemini Live encountered an error.';
+            const errStr = err?.message || String(err) || 'Gemini Live encountered an error.';
             setCallErrorMessage(errStr);
             setCallStatus('error');
             const errChatMessage: ChatMessage = {
@@ -829,41 +891,59 @@ export const AskGNSWidget: React.FC<{ onOpenViewingModal?: (title?: string, id?:
               sender: 'assistant',
               text: `Call Error: ${errStr}`,
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              isError: true,
             };
             setMessages((prev) => [...prev, errChatMessage]);
           },
         },
       });
 
-      liveSessionRef.current = session;
+      // 5. Wait for session to be established and ready before setting up microphone capture
+      const readySession = await sessionPromise;
+      liveSessionRef.current = readySession;
 
-      const micSource = inputCtx.createMediaStreamSource(stream);
-      const processor = inputCtx.createScriptProcessor(2048, 1, 1);
-      audioProcessorRef.current = processor;
+      // 6. Start microphone capture only after session is open and ready
+      if (inputAudioCtxRef.current) {
+        const micSource = inputAudioCtxRef.current.createMediaStreamSource(stream);
+        const processor = inputAudioCtxRef.current.createScriptProcessor(2048, 1, 1);
+        audioProcessorRef.current = processor;
 
-      processor.onaudioprocess = (e) => {
-        if (!isCallActiveRef.current || isMutedRef.current) return;
-        if (!liveSessionRef.current) return;
+        processor.onaudioprocess = (e) => {
+          if (!isCallActiveRef.current || isMutedRef.current) return;
+          const currentSess = liveSessionRef.current;
+          if (!currentSess) return;
 
-        const inputData = e.inputBuffer.getChannelData(0);
-        const pcmBase64 = processInputAudioTo16k(inputData, inputCtx.sampleRate);
+          const inputData = e.inputBuffer.getChannelData(0);
+          const pcmBase64 = processInputAudioTo16k(
+            inputData,
+            inputAudioCtxRef.current?.sampleRate || 16000
+          );
 
-        try {
-          liveSessionRef.current.sendRealtimeInput({
-            audio: { data: pcmBase64, mimeType: 'audio/pcm;rate=16000' },
-          });
-        } catch {}
-      };
+          try {
+            currentSess.sendRealtimeInput({
+              audio: { data: pcmBase64, mimeType: 'audio/pcm;rate=16000' },
+            });
+          } catch {}
+        };
 
-      micSource.connect(processor);
-      processor.connect(inputCtx.destination);
+        micSource.connect(processor);
+        processor.connect(inputAudioCtxRef.current.destination);
+      }
     } catch (err: any) {
-      console.warn('Audio system initialization issue:', err?.message || err);
-      const msg = err?.message || 'Could not initiate audio call.';
+      console.warn('Live voice call initialization error:', err);
+      const msg = err?.message || String(err) || 'Could not initiate audio call.';
       setCallErrorMessage(msg);
       setCallStatus('error');
       setIsCallActive(false);
       isCallActiveRef.current = false;
+      const errChatMessage: ChatMessage = {
+        id: `err-${Date.now()}`,
+        sender: 'assistant',
+        text: `Call Error: ${msg}`,
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        isError: true,
+      };
+      setMessages((prev) => [...prev, errChatMessage]);
     }
   };
 
